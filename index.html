@@ -422,6 +422,7 @@ let MTiNMS = {
 			let chartdata_mediandaily = [];
 			let chartdata_bestdaily = [];
 			let chartdata_newrecord = [];
+			let chartdata_completedtrials_cumulative = [];
 			for (let [key, value] of Object.entries(dict_stats['medianOfTotal_daily'])) {
 				chartdata_mediandaily.push({ x: new Date(parseInt(key)), y: value });
 			}
@@ -431,12 +432,25 @@ let MTiNMS = {
 			for (let [key, value] of Object.entries(this.dict_stats_g['newrecords'])) { // always use _g
 				chartdata_newrecord.push({ x: new Date(parseInt(key)), y: value });
 			}
+			{
+				let keys_sorted = Object.keys(this.dict_stats_g.numOfRecords_daily).sort((a,b)=>(a-b));
+				let c = 0;
+				let numMinDate = Object.keys(dict_stats['medianOfTotal_daily']).reduce((a, c) => Math.min(a, c), Infinity);
+				for (let i=0; i<keys_sorted.length; i++) {
+					c += this.dict_stats_g.numOfRecords_daily[keys_sorted[i]];
+					if (keys_sorted[i]>=numMinDate) {
+						chartdata_completedtrials_cumulative.push({ x: new Date(parseInt(keys_sorted[i])), y: c });
+					}
+				}
+			}
 
 			let chart_options_daily = {
 				x: {},
 				scales: {
 					x: { type: 'time' },
-					y: { display: true, title: { display: true, text: 'sec' } }
+					y: { display: true, title: { display: true, text: 'sec' } },
+					yR: { position: 'right', max: chartdata_completedtrials_cumulative[chartdata_completedtrials_cumulative.length-1].y,
+						display: true, title: { display: true, text: 'completed trials (cumulative)' } }
 				},
 			};
 			if (str_type === 'w') {
@@ -445,9 +459,10 @@ let MTiNMS = {
 			let chart_dailychart = new Chart(e_dailychart, {
 				type: 'line',
 				data: {
-					datasets: [{ label: 'daily median', data: chartdata_mediandaily, borderWidth: 1 },
-					{ label: 'daily best', data: chartdata_bestdaily, borderWidth: 1 },
-					{ label: 'newrecords', data: chartdata_newrecord }]
+					datasets: [{ label: 'daily median', data: chartdata_mediandaily, borderWidth: 1, backgroundColor: "rgba(54, 162, 235, 0.5)", borderColor: "rgb(54, 162, 235)"},
+					{ label: 'daily best', data: chartdata_bestdaily, borderWidth: 1, backgroundColor: "rgba(255, 99, 132, 0.5)", borderColor: "rgb(255, 99, 132)" },
+					{ label: 'newrecords', data: chartdata_newrecord, stepped: true, backgroundColor: "rgba(255, 159, 64, 0.5)", borderColor: "rgb(255, 159, 64)" },
+					{ label: 'trials(cumulative)', data: chartdata_completedtrials_cumulative, showLine: true, stepped: true, borderWidth: 1, pointRadius: 0, pointBorderWidth: 0, borderColor: 'green', yAxisID: 'yR'}]
 				},
 				options: chart_options_daily,
 				plugins: [MTiNMS.CHARTJS_PLUGIN]
@@ -1409,14 +1424,23 @@ let MTiNMS = {
 		e_buttoncalc.innerText = 'calculate windowed statistics';
 
 		let chart_data = [];
-		for (let [key, value] of Object.entries(stats_daily)) {
-			chart_data.push({ x: new Date(parseInt(key)), y: value });
+		let chart_data_cumulative = [];
+		{
+			let keys_sorted = Object.keys(stats_daily).sort((a,b)=>(a-b));
+			for (let i=0; i<keys_sorted.length; i++) {
+				chart_data.push({ x: new Date(parseInt(keys_sorted[i])), y: stats_daily[keys_sorted[i]] });
+				chart_data_cumulative.push({ x: new Date(parseInt(keys_sorted[i])), y: stats_daily[keys_sorted[i]] });
+				if (i>0) {
+					chart_data_cumulative[i].y += chart_data_cumulative[i-1].y;
+				}
+			}
 		}
+
 		let chart_options = {
-			y: { min: 0 },
 			scales: {
 				x: { type: 'time' },
-				y: { display: true, title: { display: true, text: 'completed trials' } }
+				y: { position: 'left', beginAtZero: true, display: true, title: { display: true, text: 'completed trials' } },
+				yR: { position: 'right', beginAtZero: true, max: chart_data_cumulative[chart_data_cumulative.length-1].y, display: true, title: { display: true, text: 'completed trials (cumulative)' } }
 			},
 			plugins: {
 				legend: {
@@ -1436,7 +1460,8 @@ let MTiNMS = {
 		let statschart = new Chart(e_chart, {
 			type: 'line',
 			data: {
-				datasets: [{ data: chart_data, showLine: false, pointRadius: 2, pointBorderWidth: 0, backgroundColor: 'black' }]
+				datasets: [{ data: chart_data, showLine: false, pointRadius: 2, pointBorderWidth: 0, backgroundColor: 'black', yAxisID: 'y' },
+					{ data: chart_data_cumulative, showLine: true, stepped: true, borderWidth: 1, pointRadius: 0, pointBorderWidth: 0, borderColor: 'green', yAxisID: 'yR' }]
 			},
 			options: chart_options,
 			plugins: [MTiNMS.CHARTJS_PLUGIN]

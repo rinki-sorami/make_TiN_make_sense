@@ -1367,7 +1367,7 @@ MTiNMS.detail.Display = class {
         e_h2.innerText = 'Detail';
 
         let e_label = MTiNMS.get_or_create_element_with_id(this.#div_top, MTiNMS.detail.Display.STR_ELEMENTID_LABELINPUTFILE, 'label');
-        e_label.htmlFor = this.STR_ELEMENTID_INPUTFILE;
+        e_label.htmlFor = MTiNMS.detail.Display.STR_ELEMENTID_INPUTFILE;
         e_label.innerText = 'Choose all "*.log" (in "<TiN exe Folder>\\Typing (is) Nonsense_Data\\SaveData\\Nonsense\\Completed"): ';
         this.#div_top.appendChild(document.createElement('br'));
         let e_input = MTiNMS.get_or_create_element_with_id(this.#div_top, MTiNMS.detail.Display.STR_ELEMENTID_INPUTFILE, 'input');

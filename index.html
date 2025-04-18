@@ -582,6 +582,9 @@ MTiNMS.ranking.Record = class {
         this.datetime = datetime; this.filename = filename;
         this.b_protection = b_protection; this.b_log = b_log; this.b_code = b_code;
     }
+    get laps () {
+        return [this.lap1, this.lap2, this.lap3, this.lap4, this.lap5, this.lap6, this.lap7, this.lap8, this.lap9, this.lap10];
+    }
     static new_from_line(line) {
         const arr_items = line.split(',');
         if (arr_items.length != 18) { return null; }
@@ -730,9 +733,166 @@ MTiNMS.ranking.Stats = class {
     }
 };
 
+MTiNMS.ranking.LapDistribution = class {
+    #settings = { bucketWidthMillisec: 100, cutOffRatio: 0.01 };
+    #numOfRecords = 0;
+    #numOfLaps = 0;
+    #arr_frequencies = [];
+    #arr_probabilities = [];
+    #arr_frequenciesOfTotal = [];
+    #arr_probabilitiesOfTotal = [];
+    #arr_probabilitiesOfTotal_inTheSameBucketsToObserved = [];
+    #arr_estimatedFrequenciesOfTotal = [];
+
+    set bucketWidthMillisec (msec) {
+        const int_msec = parseInt(msec);
+        if (isNaN(int_msec) !== false) {
+            this.#settings.bucketWidthMillisec = int_msec;
+        }
+    }
+    get bucketWidthMillisec () {
+        return this.#settings.bucketWidthMillisec;
+    }
+    get arr_frequenciesAndRepresentatives () {
+        let arr = [];
+        this.#arr_frequencies.forEach( (e,i) => {
+            arr[arr.length] = { frequency: e, representative: this.convertBucketIndexToRepresentativeMillisec(i) };
+        });
+        return arr;
+    }
+    get arr_probabilitiesAndRepresentatives () {
+        let arr = [];
+        this.#arr_probabilities.forEach( (e,i) => {
+            arr[arr.length] = { probability: e, representative: this.convertBucketIndexToRepresentativeMillisec(i) };
+        });
+        return arr;
+    }
+    get arr_frequenciesAndRepresentativesOfTotal () {
+        let arr = [];
+        this.#arr_frequenciesOfTotal.forEach( (e,i) => {
+            arr[arr.length] = { frequency: e, representative: this.convertBucketIndexToRepresentativeMillisec(i)*MTiNMS.TiN.NUM_LAPS };
+        });
+        return arr;
+    }
+    get arr_perMilleProbabilitiesAndRepresentativesOfTotal () {
+        let arr = [];
+        this.#arr_frequenciesOfTotal.forEach( (e,i) => {
+            arr[arr.length] = { probability: e/this.#numOfRecords*1000, representative: this.convertBucketIndexToRepresentativeMillisec(i)*MTiNMS.TiN.NUM_LAPS };
+        });
+        return arr;
+    }
+    get arr_estimatedProbabilitiesAndRepresentativesOfTotal () {
+        let arr = [];
+        this.#arr_probabilitiesOfTotal.forEach( (e,i) => {
+            arr[arr.length] = { probability: e, representative: this.convertBucketIndexToRepresentativeMillisec(i) };
+        });
+        return arr;
+    }
+    get arr_estimatedPerMilleProbabilitiesAndRepresentativesOfTotal () {
+        let arr = this.arr_estimatedProbabilitiesAndRepresentativesOfTotal.map( (e)=>{
+            e.probability *= 1000;
+            return e;
+        });
+        return arr;
+    }
+    get arr_estimatedPerMilleProbabilitiesAndRepresentativesOfTotal_inTheSameBucketsToObserved () {
+        let arr = [];
+        this.#arr_probabilitiesOfTotal_inTheSameBucketsToObserved.forEach( (e,i) => {
+            arr[arr.length] = { probability: e*1000, representative: this.convertBucketIndexToRepresentativeMillisec(i)*MTiNMS.TiN.NUM_LAPS };
+        });
+        return arr;
+    }
+    get arr_estimatedFrequenciesAndRepresentativesOfTotal () {
+        let arr = [];
+        this.#arr_estimatedFrequenciesOfTotal.forEach( (e,i) => {
+            arr[arr.length] = { frequency: e*MTiNMS.TiN.NUM_LAPS, representative: this.convertBucketIndexToRepresentativeMillisec(i) };
+        });
+        return arr;
+    }
+
+    constructor(trialRecords, settings = undefined) {
+        if (settings !== undefined) {
+           this.bucketWidthMillisec = settings.bucketWidthMillisec;
+        }
+
+        this.#numOfRecords = trialRecords.length;
+        trialRecords.forEach( (record) => {
+            const laps = record.laps;
+            this.#numOfLaps += laps.length;
+            laps.forEach( lap => {
+                const bucketIndex = this.convertMillisecToBucketIndex(lap);
+                this.#arr_frequencies[bucketIndex] = (this.#arr_frequencies[bucketIndex] === undefined) ? 1 : this.#arr_frequencies[bucketIndex]+1;
+            });
+            const bucketIndexOfTotal = this.convertMillisecToBucketIndex(record.total/MTiNMS.TiN.NUM_LAPS);
+            this.#arr_frequenciesOfTotal[bucketIndexOfTotal] = (this.#arr_frequenciesOfTotal[bucketIndexOfTotal] === undefined) ? 1 : this.#arr_frequenciesOfTotal[bucketIndexOfTotal]+1;
+        });
+
+        // calculate arr_probabilities
+        let sumOfFrequencies = 0;
+        const arr_freqCumulative = structuredClone(this.#arr_frequencies);
+        this.#arr_frequencies.forEach( (e,i) => {
+            sumOfFrequencies += e;
+            arr_freqCumulative[i] = sumOfFrequencies;
+        });
+        const ind_leftCutOff = arr_freqCumulative.findIndex( (e)=> e/sumOfFrequencies > this.#settings.cutOffRatio );
+        const ind_rightCutOff = arr_freqCumulative.findLastIndex( (e)=> (sumOfFrequencies-e)/sumOfFrequencies > this.#settings.cutOffRatio );
+
+        const arr_freqWork = [];
+        let previousIndex = undefined;
+        for (let i = ind_leftCutOff; i<=ind_rightCutOff; i++) {
+            if (i in this.#arr_frequencies) {
+                arr_freqWork[i] = this.#arr_frequencies[i];
+                if (previousIndex !== undefined) {
+                    for (let j=previousIndex+1; j<i; j++) {
+                        const ratio_i = (j-previousIndex)/(i-previousIndex);
+                        arr_freqWork[j] = arr_freqWork[previousIndex] * (1-ratio_i) + arr_freqWork[i] * ratio_i;
+                    }
+                }
+                previousIndex = i;
+            }
+        }
+        const sumOfFreqWork = arr_freqWork.reduce( (a,c) => a+c );
+        this.#arr_probabilities = arr_freqWork.map( (e) => e/sumOfFreqWork );
+
+        // calculate arr_probabilitiesOfTotal
+        let arr_totalProbabilities = structuredClone(this.#arr_probabilities);
+        for (let i_lap=1; i_lap<MTiNMS.TiN.NUM_LAPS; i_lap++) {
+            let arr_totalProbabilities_previous = arr_totalProbabilities;
+            arr_totalProbabilities = [];
+            arr_totalProbabilities_previous.forEach((e_wTotal, i_wTotal) => {
+                this.#arr_probabilities.forEach((e_wLap, i_wLap) => {
+                    const i_target = i_wTotal + i_wLap;
+                    const num_add = e_wTotal * e_wLap;
+                    arr_totalProbabilities[i_target] = (arr_totalProbabilities[i_target] === undefined) ? num_add : arr_totalProbabilities[i_target]+num_add;
+                });
+            });
+        }
+        this.#arr_probabilitiesOfTotal = arr_totalProbabilities;
+        this.#arr_estimatedFrequenciesOfTotal = arr_totalProbabilities.map( (e) => e*this.#numOfRecords );
+        
+        this.#arr_probabilitiesOfTotal.forEach( (e, i) => {
+            const bucketIndexOfTotal = this.convertMillisecToBucketIndex(this.convertBucketIndexToRepresentativeMillisec(i)/MTiNMS.TiN.NUM_LAPS);
+            this.#arr_probabilitiesOfTotal_inTheSameBucketsToObserved[bucketIndexOfTotal] = (this.#arr_probabilitiesOfTotal_inTheSameBucketsToObserved[bucketIndexOfTotal] === undefined) ? e : this.#arr_probabilitiesOfTotal_inTheSameBucketsToObserved[bucketIndexOfTotal]+e;
+        });
+    }
+    
+    convertBucketIndexToRepresentativeMillisec(ind) {
+        return ind * this.bucketWidthMillisec;
+    }
+    convertBucketIndexToArrRangeMillisec(ind) {
+        const min = (ind === 0) ? 0 : (ind-0.5) * this.bucketWidthMillisec;
+        const max = (ind+0.5) * this.bucketWidthMillisec;
+        return [min, max];
+    }
+    convertMillisecToBucketIndex(msec) {
+        return Math.floor( (msec / this.bucketWidthMillisec) + 0.5 );
+    }
+};
+
 MTiNMS.ranking.Calculator = class {
     #settings = { str_type: '', timeWindow: undefined };
     #stats = {};
+    #lapDistribution = {};
     #dailyStats = {};
     #newRecords_g = {}; // always global
 
@@ -758,6 +918,7 @@ MTiNMS.ranking.Calculator = class {
         }
         return result;
     }
+    get lapDistribution() { return this.#lapDistribution; }
     get_statsByKeyAndName(key, name) {
         if ( MTiNMS.ranking.Stats.ARR_STATS_KEYS.includes(key) && MTiNMS.ranking.Stats.ARR_STATS_NAMES.includes(name) ) {
             return this.#stats[key][name];
@@ -785,6 +946,7 @@ MTiNMS.ranking.Calculator = class {
         let arr_boundedRecords = ranking0txt.get_boundedRecords(this.#settings.timeWindow);
 
         this.#stats = new MTiNMS.ranking.Stats(arr_boundedRecords, this.#settings);
+        this.#lapDistribution = new MTiNMS.ranking.LapDistribution(arr_boundedRecords, this.#settings.lapDistribution);
         
         this.#dailyStats = {};
         let dict_BoundedDailyRecords = ranking0txt.get_dictBoundedDailyRecords(this.#settings.timeWindow);
@@ -822,6 +984,8 @@ MTiNMS.ranking.Display = class {
     static STR_ELEMENTID_BASICSTABLE_COMMON = 'table' + this.STR_ELEMENTID_SUFFIX + '_basics' + '_';
     static STR_ELEMENTID_STATSTABLE_COMMON = 'table' + this.STR_ELEMENTID_SUFFIX + '_stats' + '_';
     static STR_ELEMENTID_STATSCHART_COMMON = 'canvas' + this.STR_ELEMENTID_SUFFIX + '_statschart' + '_';
+    static STR_ELEMENTID_LAPDISTRIBUTIONCHART_COMMON = 'canvas' + this.STR_ELEMENTID_SUFFIX + '_lapdistribution' + '_';
+    static STR_ELEMENTID_TOTALDISTRIBUTIONCHART_COMMON = 'canvas' + this.STR_ELEMENTID_SUFFIX + '_totaldistribution' + '_';
     static STR_ELEMENTID_DAILYCHART_COMMON = 'canvas' + this.STR_ELEMENTID_SUFFIX + '_dailychart' + '_';
 
     static #instance; // singleton
@@ -1035,8 +1199,13 @@ MTiNMS.ranking.Display = class {
             plugins: [MTiNMS.CHARTJS_PLUGIN]
         });
 
-        let e_dailychart = MTiNMS.get_or_create_element_with_id(div_top, MTiNMS.ranking.Display.STR_ELEMENTID_DAILYCHART_COMMON + str_type, 'canvas');
+        let e_lapDistributionChart = MTiNMS.get_or_create_element_with_id(div_top, MTiNMS.ranking.Display.STR_ELEMENTID_LAPDISTRIBUTIONCHART_COMMON + str_type, 'canvas');
+        let chart_lapDistribution = new Chart(e_lapDistributionChart, this.convert_calculator_to_chartConfigulation_of_lapDistribution(calculator));
 
+        let e_totalDistributionChart = MTiNMS.get_or_create_element_with_id(div_top, MTiNMS.ranking.Display.STR_ELEMENTID_TOTALDISTRIBUTIONCHART_COMMON + str_type, 'canvas');
+        let chart_totalDistribution = new Chart(e_totalDistributionChart, this.convert_calculator_to_chartConfigulation_of_totalDistribution(calculator));
+
+        let e_dailychart = MTiNMS.get_or_create_element_with_id(div_top, MTiNMS.ranking.Display.STR_ELEMENTID_DAILYCHART_COMMON + str_type, 'canvas');
         let chartdata_daily = this.convert_calculator_to_chartdatadaily(calculator);
 
         let chart_options_daily = {
@@ -1122,6 +1291,71 @@ MTiNMS.ranking.Display = class {
             chartdatastats[3].data[i_lap] = calculator.get_statsByKeyAndName('lap' + (i_lap + 1), 'quartile3').value / 1000;
         }
         return chartdatastats;
+    }
+    convert_calculator_to_chartConfigulation_of_lapDistribution(calculator) {
+        const arr_frequenciesAndRepresentatives = calculator.lapDistribution.arr_frequenciesAndRepresentatives;
+        const arr_probabilitiesAndRepresentatives = calculator.lapDistribution.arr_probabilitiesAndRepresentatives;
+
+        let configulation = {
+            type: 'scatter',
+            options: {
+                scales: {
+                    x: { type: 'linear', position: 'bottom', title: { display: true, text: 'lap time(s)'} },
+                    yFrequency: { min: 0, position: 'left', display: true, title: { display: true, text: 'frequency' } },
+                    yProbability: { min: 0, position: 'right', display: true, title: { display: true, text: 'probability' } }
+                },
+            },
+            data: {
+                datasets: [
+                    {
+                        label: 'freqeuency',
+                        data: arr_frequenciesAndRepresentatives.map( (e) => { return { x: e.representative/1000, y:e.frequency }; } ),
+                        pointStyle: 'cross',
+                        yAxisID: 'yFrequency',
+                    },{
+                        label: 'interpolated probability',
+                        data: arr_probabilitiesAndRepresentatives.map( (e) => { return { x: e.representative/1000, y:e.probability }; } ),
+                        pointStyle: 'crossRot',
+                        yAxisID: 'yProbability',
+                    }
+                ]
+            },
+            plugins: [MTiNMS.CHARTJS_PLUGIN]
+        };
+
+        return configulation;
+    }
+    convert_calculator_to_chartConfigulation_of_totalDistribution(calculator) {
+        const arr_perMilleProbabilitiesAndRepresentativesOfTotal = calculator.lapDistribution.arr_perMilleProbabilitiesAndRepresentativesOfTotal;
+        const arr_estimatedPerMilleProbabilitiesAndRepresentativesOfTotal_inTheSameBucketsToObserved = calculator.lapDistribution.arr_estimatedPerMilleProbabilitiesAndRepresentativesOfTotal_inTheSameBucketsToObserved;
+
+        let configulation = {
+            type: 'scatter',
+            options: {
+                scales: {
+                    x: { type: 'linear', position: 'bottom', title: { display: true, text: 'total time(s)'} },
+                    yPerMilleProbability: { min: 0, position: 'left', display: true, title: { display: true, text: 'per mille probability' } },
+                },
+            },
+            data: {
+                datasets: [
+                    {
+                        label: 'observed probability',
+                        data: arr_perMilleProbabilitiesAndRepresentativesOfTotal.map( (e) => { return { x: e.representative/1000, y:e.probability }; } ),
+                        yAxisID: 'yPerMilleProbability',
+                    },{
+                        label: 'estimated probability from laps',
+                        data: arr_estimatedPerMilleProbabilitiesAndRepresentativesOfTotal_inTheSameBucketsToObserved.map( (e) => { return { x: e.representative/1000, y:e.probability }; } ),
+                        pointStyle: false,
+                        showLine: true,
+                        yAxisID: 'yPerMilleProbability',
+                    }
+                ]
+            },
+            plugins: [MTiNMS.CHARTJS_PLUGIN]
+        };
+
+        return configulation;
     }
     convert_calculator_to_chartdatadaily(calculator) {
         let chartdatadaily = {};

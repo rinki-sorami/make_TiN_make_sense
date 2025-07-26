@@ -178,29 +178,6 @@ MTiNMS.convertValuesToCumulatives = function (arr_values) { // arr_values can be
         });
     }
 };
-MTiNMS.convert_2gramkey_to_innertext = function (key) {
-    let result = '';
-    arr_keys = key.split('__');
-    if (arr_keys.length === 1) {
-        return this.convert_key_to_innertext(key);
-    } else {
-        return this.convert_key_to_innertext(arr_keys[0]) + ', ' + this.convert_key_to_innertext(arr_keys[1]);
-    }
-};
-MTiNMS.convert_key_to_innertext = function (key) {
-    let result = '';
-    if ((key.length === 4) && (['0', '1'].includes(key[3]))) {
-        let str_shift = '';
-        switch (key[3]) {
-            case '0': str_shift = 'off'; break;
-            case '1': str_shift = 'on'; break;
-        }
-        result = key[0] + ' 0x' + key[1] + key[2] + ' ' + str_shift;
-    } else {
-        result = key;
-    }
-    return this.get_escaped(result);
-};
 MTiNMS.get_escaped = function (text) {
     return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 };
@@ -1655,6 +1632,197 @@ MTiNMS.detail.Calculator = class {
     }
 };
 
+MTiNMS.detail.StatsKeyChar = class {
+    static ARR_SHIFTSTATES = ['off', 'on', 'any'];
+    #symbol;
+    #keycode;
+    #shift;
+
+    get symbol() { return this.#symbol; }
+    get keycode() { return this.#keycode; }
+    get shift() { return this.#shift; }
+    get innerText() {
+        let result = this.#symbol + ' 0x' + (this.#keycode.toString(16).padStart(2, '0')) + ' ' + this.#shift;
+        return MTiNMS.get_escaped(result);
+    }
+    toString() {
+        return this.#symbol + '0x' + (this.#keycode.toString(16).padStart(2, '0')) + this.#shift;
+    }
+    constructor(str_symbol, num_keycode, str_shift) {
+        if (!this.constructor.ARR_SHIFTSTATES.includes(str_shift)) {
+            throw new Error('constructor failed. unknown str_shift was specified')
+        }
+        this.#symbol = str_symbol;
+        this.#keycode = num_keycode;
+        this.#shift = str_shift;
+    }
+    static new_from_target_rawkeys_chars (target, rawkeys, chars) {
+        const str_symbol = chars[target];
+        let num_rawkey = undefined;
+        let str_shift = undefined;
+        if (target <= MTiNMS.TiN.NUM_NORMALRAWKEYS) {
+            num_rawkey = rawkeys[target + 2];
+            if (target === 0) { // usually space key but could be another
+                str_shift = 'any';
+            } else {
+                str_shift = 'off';
+            }
+        } else {
+            num_rawkey = rawkeys[target - MTiNMS.TiN.NUM_NORMALRAWKEYS + 2];
+            str_shift = 'on';
+        }
+        return new this(str_symbol, num_rawkey, str_shift);
+    }
+    static new_from_string(str) {
+        if ( (str.length !== 7) && (str.length !== 8) ) {
+            throw new Error('new_from_string failed. str.length was not anticipated value');
+        }
+        const str_symbol = str.slice(0,1);
+        const str_keycode = str.slice(1,5);
+        const num_keycode = parseInt(str_keycode, 16);
+        const str_shift = str.slice(5);
+        if ( isNaN(num_keycode) ) {
+            throw new Error('new_from_string failed. keycode was interpreted as NaN');
+        }
+        if ( !this.ARR_SHIFTSTATES.includes(str_shift) ) {
+            throw new Error('new_from_string failed. shift was not anticipatd value');
+        }
+        return new this(str_symbol, num_keycode, str_shift);
+    }
+};
+
+MTiNMS.detail.StatsKey2gram = class {
+    static ARR_TYPES = ['state-state', 'state-char', 'char-state', 'char-char'];
+    static ARR_STATES = ['shiftHoldOff', 'shiftHoldOn', 'shiftOnSet', 'shiftOffSet'];
+    static STR_SPLITTER = '__';
+    #char1 = undefined;
+    #char2 = undefined;
+    #state = undefined;
+
+    get type() { 
+        if ( (this.#char1 === undefined) && (this.#char2 === undefined) ) {
+            return 'state-state';
+        } else if (this.#char1 === undefined) {
+            return 'state-char';
+        } else if (this.#char2 === undefined) {
+            return 'char-state';
+        } else {
+            return 'char-char';
+        }
+    }
+    get char1() { return this.#char1; }
+    get char2() { return this.#char2; }
+    get state() { return this.#state; }
+    get innerText() {
+        switch (this.type) {
+            case 'state-state':
+                return this.state.toString();
+            case 'state-char':
+                return this.state.toString() + ', ' + this.char2.innerText;
+            case 'char-state':
+                return this.char1.innerText + ', ' + this.state.toString();
+            case 'char-char':
+                return this.char1.innerText + ', ' + this.char2.innerText;
+            default:
+                return 'unknown';
+        }
+    }
+
+    constructor(char1, char2, str_state=undefined) {
+        if ( (char1 === undefined) || (char2 === undefined) ) {
+            if (str_state === undefined) {
+                throw new Error('constructor failed. the arguments are invalid');
+            }
+        }
+        this.#char1 = char1;
+        this.#char2 = char2;
+        if (str_state !== undefined) {
+            if ( this.constructor.ARR_STATES.includes(str_state) ) {
+                this.#state = str_state;
+            } else {
+                throw new Error('constructor failed. the argument "str_state" is invalid. str_state.toString(): ' + str_state.toString());
+            }
+        } else {
+            this.#state = this.constructor.get_state_from_chars(this.#char1, this.#char2);
+        }
+    }
+    static get_state_from_chars(char1, char2) {
+        if ( !('shift' in char1) || !('shift' in char2) ) {
+            throw new Error('failed to get property "shift". the arguments seem invalid');
+        }
+        if ( (char1.shift === 'any') || (char2.shift === 'any') ) {
+            return undefined;
+        } else {
+            if (char1.shift === 'off') {
+                if (char2.shift === 'off') {
+                    return 'shiftHoldOff';
+                } else if (char2.shift === 'on') {
+                    return 'shiftOnSet';
+                }
+            } else if (char1.shift === 'on') {
+                if (char2.shift === 'off') {
+                    return 'shiftOffSet';
+                } else if (char2.shift === 'on') {
+                    return 'shiftHoldOn';
+                }
+            }
+            throw new Error('failed to get valid value from property "shift". the arguments seem invalid');
+        }
+    }
+
+    toString() {
+        switch (this.type) {
+            case 'state-state':
+                return this.state.toString();
+            case 'state-char':
+                return this.state.toString() + this.constructor.STR_SPLITTER + this.char2.toString();
+            case 'char-state':
+                return this.char1.toString() + this.constructor.STR_SPLITTER + this.state.toString();
+            case 'char-char':
+                return this.char1.toString() + this.constructor.STR_SPLITTER + this.char2.toString();
+            default:
+                return 'unknown';
+        }
+    }
+    static new_from_string(str) {
+        if (this.ARR_STATES.includes(str)) {
+            return new this(undefined, undefined, str);
+        } else {
+            const arr_chars = str.split(this.STR_SPLITTER);
+            if (arr_chars.length !== 2) {
+                throw new Error('new_from_string failed. the argument was not split into 2');
+            }
+            if (this.ARR_STATES.includes(arr_chars[0])) {
+                let char2;
+                try {
+                    char2 = MTiNMS.detail.StatsKeyChar.new_from_string(arr_chars[1]);
+                } catch(e) {
+                    throw new Error('new_from_string failed. StatsKeyChar.new_from_string(arr_chars[1]) threw an error: ' + e.message);
+                }
+                return new this(undefined, char2, arr_chars[0]);
+            } else if (this.ARR_STATES.includes(arr_chars[1])) {
+                let char1;
+                try {
+                    char1 = MTiNMS.detail.StatsKeyChar.new_from_string(arr_chars[0]);
+                } catch(e) {
+                    throw new Error('new_from_string failed. StatsKeyChar.new_from_string(arr_chars[0]) threw an error: ' + e.message);
+                }
+                return new this(char1, undefined, arr_chars[1]);
+            } else {
+                let char1;
+                let char2;
+                try {
+                    char1 = MTiNMS.detail.StatsKeyChar.new_from_string(arr_chars[0]);
+                    char2 = MTiNMS.detail.StatsKeyChar.new_from_string(arr_chars[1]);
+                } catch(e) {
+                    throw new Error('new_from_string failed. StatsKeyChar.new_from_string(arr_chars[n]) threw an error: ' + e.message);
+                }
+                return new this(char1, char2);
+            }
+        }
+    }
+};
+
 MTiNMS.detail.Display = class {
     static STR_ELEMENTID_SUFFIX = '_MTiNMS_detail';
     static STR_ELEMENTID_H2 = 'h2' + this.STR_ELEMENTID_SUFFIX;
@@ -1669,6 +1837,7 @@ MTiNMS.detail.Display = class {
     static STR_ELEMENTID_STATS2GRAMTABLE_COMMON = 'table' + this.STR_ELEMENTID_SUFFIX + '_stats2gram' + '_';
     static STR_ELEMENTID_STATS1GRAMCHART_COMMON = 'canvas' + this.STR_ELEMENTID_SUFFIX + '_stats1gramchart' + '_';
     static STR_ELEMENTID_STATS2GRAMCHART_COMMON = 'canvas' + this.STR_ELEMENTID_SUFFIX + '_stats2gramchart' + '_';
+    static STR_ELEMENTID_STATS2GRAMCHARTSLOWEST_COMMON = 'canvas' + this.STR_ELEMENTID_SUFFIX + '_stats2gramchartslowest' + '_';
     static STR_ELEMENTID_POSCHART_COMMON = 'canvas' + this.STR_ELEMENTID_SUFFIX + '_poschart' + '_';
 
     static #instance; // singleton
@@ -1827,12 +1996,12 @@ MTiNMS.detail.Display = class {
         e_select_poschart.dispatchEvent(new Event('change'));
     
         if (str_type === 'g') {
-            let e_stats2gramtablelegend = this.create_2gramtablelegendtable(e_div, this.STR_ELEMENTID_STATS2GRAMTABLE_COMMON + 'legend_' + str_type);
+            let e_stats2gramtablelegend = this.create_2gramtablelegendtable(e_div, this.constructor.STR_ELEMENTID_STATS2GRAMTABLE_COMMON + 'legend_' + str_type);
         }
-        let e_stats2gramtable0 = MTiNMS.get_or_create_element_with_id(e_div, this.STR_ELEMENTID_STATS2GRAMTABLE_COMMON + '0_' + str_type, 'table');
-        let e_stats2gramtable1 = MTiNMS.get_or_create_element_with_id(e_div, this.STR_ELEMENTID_STATS2GRAMTABLE_COMMON + '1_' + str_type, 'table');
-        let e_stats2gramtable2 = MTiNMS.get_or_create_element_with_id(e_div, this.STR_ELEMENTID_STATS2GRAMTABLE_COMMON + '2_' + str_type, 'table');
-        let e_stats2gramtable3 = MTiNMS.get_or_create_element_with_id(e_div, this.STR_ELEMENTID_STATS2GRAMTABLE_COMMON + '3_' + str_type, 'table');
+        let e_stats2gramtable0 = MTiNMS.get_or_create_element_with_id(e_div, this.constructor.STR_ELEMENTID_STATS2GRAMTABLE_COMMON + '0_' + str_type, 'table');
+        let e_stats2gramtable1 = MTiNMS.get_or_create_element_with_id(e_div, this.constructor.STR_ELEMENTID_STATS2GRAMTABLE_COMMON + '1_' + str_type, 'table');
+        let e_stats2gramtable2 = MTiNMS.get_or_create_element_with_id(e_div, this.constructor.STR_ELEMENTID_STATS2GRAMTABLE_COMMON + '2_' + str_type, 'table');
+        let e_stats2gramtable3 = MTiNMS.get_or_create_element_with_id(e_div, this.constructor.STR_ELEMENTID_STATS2GRAMTABLE_COMMON + '3_' + str_type, 'table');
         let arr_options = this.convert_dictstats_to_arrdatatableoptionsstats2gram(dict_stats);
         new DataTable('#' + e_stats2gramtable0.id, arr_options[0]);
         new DataTable('#' + e_stats2gramtable1.id, arr_options[1]);
@@ -1840,8 +2009,14 @@ MTiNMS.detail.Display = class {
         new DataTable('#' + e_stats2gramtable3.id, arr_options[3]);
         MTiNMS.detail.arr_options = arr_options;
     
-        let e_stats2gramchart = MTiNMS.get_or_create_element_with_id(e_div, this.STR_ELEMENTID_STATS2GRAMCHART_COMMON + str_type, 'canvas');
+        let e_stats2gramchart = MTiNMS.get_or_create_element_with_id(e_div, this.constructor.STR_ELEMENTID_STATS2GRAMCHART_COMMON + str_type, 'canvas');
         let stats2gramchart = new Chart(e_stats2gramchart, this.convert_dictstats_to_chartconfigstats2gram(dict_stats));
+
+        // let dict_chartConfigStats2gramSlowest = this.convert_dictstats_to_dictChartConfigStats2gramSlowest(dict_stats);
+        // MTiNMS.detail.StatsKey2gram.ARR_STATES.forEach( (str_shiftState)=> {
+        //     let e_stats2gramSlowest = MTiNMS.get_or_create_element_with_id(e_div, this.constructor.STR_ELEMENTID_STATS2GRAMCHARTSLOWEST_COMMON + str_shiftState + '_' + str_type, 'canvas');
+        //     new Chart(e_stats2gramSlowest, dict_chartConfigStats2gramSlowest[str_shiftState]);
+        // });
     
         if (str_type === 'g') {
             let pseudoCalculator = new MTiNMS.detail.Calculator(dict_stats);
@@ -1875,21 +2050,24 @@ MTiNMS.detail.Display = class {
         let freqs = dict_stats.elapsed_freqs;
         let tabledata = [];
     
-        let keys_sorted = ['allkey', 'space', 'shiftOff', 'shiftOn'];
+        const keys_special = ['allkey', 'shiftOff', 'shiftOn'];
         const filtered = Object.keys(freqs).filter((e) => {
-            if (e.slice(0, 3) === 'pos') {
+            try {
+                const statsKeyChar = MTiNMS.detail.StatsKeyChar.new_from_string(e);
+            } catch {
                 return false;
-            } else if (keys_sorted.includes(e)) {
-                return false;
-            } else {
-                return true;
             }
+            return true;
         });
-        keys_sorted = keys_sorted.concat(filtered);
+        let keys_sorted = keys_special.concat(filtered);
     
-        keys_sorted.forEach((key) => {
+        keys_sorted.forEach((key,index) => {
             let row = [];
-            row.push(MTiNMS.convert_key_to_innertext(key));
+            if (index < keys_special.length) {
+                row.push(key);    
+            } else {
+                row.push(MTiNMS.detail.StatsKeyChar.new_from_string(key).innerText)
+            }
             let sum = freqs[key].reduce((a, c) => (a + c.count), 0);
             row.push(sum);
             let values = MTiNMS.detail.calc_prankvalues_from_buckets(freqs[key], [0.25, 0.5, 0.75], 'min');
@@ -1978,54 +2156,27 @@ MTiNMS.detail.Display = class {
         return e_table;
     };
     convert_dictstats_to_arrtabledatastats2gram(dict_stats) {
-        let arr_tabledata = new Array(4);
+        let arr_tabledata = new Array(MTiNMS.detail.StatsKey2gram.ARR_TYPES.length);
         let freqs = dict_stats.elapsed_2gram_freqs;
     
         for (let i_arr = 0; i_arr<arr_tabledata.length; i_arr++){
             let tabledata = [];
-            
-            switch(i_arr) {
-                case 0:
-                    var keys = ['shiftHoldOff', 'shiftHoldOn', 'shiftOnSet', 'shiftOffSet'];
-                    break;
-                case 1:
-                    var keys = Object.keys(freqs).filter((e)=>{
-                        if ( e.includes('shiftHoldOff__')
-                            || e.includes('shiftHoldOn__')
-                            || e.includes('shiftOnSet__')
-                            || e.includes('shiftOffSet__')
-                        ) { return true; }
-                        else { return false; }
-                    })
-                    break;
-                case 2:
-                    var keys = Object.keys(freqs).filter((e)=>{
-                        if ( e.includes('__shiftHoldOff')
-                            || e.includes('__shiftHoldOn')
-                            || e.includes('__shiftOnSet')
-                            || e.includes('__shiftOffSet')
-                        ) { return true; }
-                        else { return false; }
-                    })
-                    break;
-                case 3:
-                    var keys = Object.keys(freqs).filter((e)=>{
-                        if ( e.includes('shiftHoldOff')
-                            || e.includes('shiftHoldOn')
-                            || e.includes('shiftOnSet')
-                            || e.includes('shiftOffSet')
-                        ) { return false; }
-                        else { return true; }
-                    })
-                    break;
-            }
+            const keys = Object.keys(freqs).filter((e)=>{
+                const statsKey2gram = MTiNMS.detail.StatsKey2gram.new_from_string(e);
+                if ( statsKey2gram.type === MTiNMS.detail.StatsKey2gram.ARR_TYPES[i_arr] ) { return true; }
+                else { return false; }
+            });
     
             keys.forEach((key) => {
                 let row = [];
-                row.push(MTiNMS.convert_2gramkey_to_innertext(key)); // need to revise
+                const statsKey2gram = MTiNMS.detail.StatsKey2gram.new_from_string(key);
+                row.push(statsKey2gram.innerText);
+                if (i_arr > 0) {
+                    row.push(statsKey2gram.state);
+                }
                 let sum = freqs[key].reduce((a, c) => (a + c.count), 0);
                 row.push(sum);
-                let values = MTiNMS.detail.calc_prankvalues_from_buckets(freqs[key], [0.25, 0.5, 0.75], 'min');
+                let values = MTiNMS.detail.calc_prankvalues_from_buckets(freqs[key], [0.25, 0.5, 0.75, 0.90, 0.95, 0.99], 'min');
                 row = row.concat(values);
                 tabledata.push(row);
             });
@@ -2035,12 +2186,26 @@ MTiNMS.detail.Display = class {
         return arr_tabledata;
     };
     convert_dictstats_to_arrdatatableoptionsstats2gram(dict_stats) {
-        let arr_options = new Array(4);
+        let arr_options = new Array(MTiNMS.detail.StatsKey2gram.ARR_TYPES.length);
         let arr_tabledata = this.convert_dictstats_to_arrtabledatastats2gram(dict_stats);
         for (let i_arr = 0; i_arr<arr_tabledata.length; i_arr++){
-            let options = {};			
-            options.columns = [{ title: 'stats' }, { title: 'count' }, { title: 'quartile1' }, { title: 'median' }, { title: 'quartile3' }];
-            options.order = [[1, 'desc']];
+            let options = {};
+            options.columns = [
+                { title: 'stats', footer: 'stats', name: 'stats' },
+                { title: 'state', footer: 'state', name: 'state' },
+                { title: 'count', footer: 'count', name: 'count' },
+                { title: 'q1', footer: 'q1', name: 'q1' },
+                { title: 'median', footer: 'median', name: 'median' },
+                { title: 'q3', footer: 'q3', name: 'q3' },
+                { title: '0.90', footer: '0.90', name: '0.90' },
+                { title: '0.95', footer: '0.95', name: '0.95' },
+                { title: '0.99', footer: '0.99', name: '0.99' },
+            ];
+            if (i_arr === 0) {
+                options.columns = options.columns.filter((e)=>(e.title!=='state'));
+                options.columns.forEach((e)=>{ delete e.footer; });
+            }
+            options.order = { name: 'median', dir: 'desc' };
             if (i_arr === 0) {
                 options.paging = false;
                 options.info = false;
@@ -2049,6 +2214,25 @@ MTiNMS.detail.Display = class {
                 options.paging = true;
                 options.info = true;
                 options.searching = true;
+            }
+            if (i_arr > 0) {
+                options.initComplete = function () {
+                    let column = this.api().column('state:name');
+                    // Create select element
+                    let select = document.createElement('select');
+                    select.add(new Option(''));
+                    column.footer().replaceChildren(select);
+                    // Apply listener for user change in value
+                    select.addEventListener('change', function () {
+                        column
+                            .search(select.value, {exact: true})
+                            .draw();
+                    });
+                    // Add list of options
+                    column.data().unique().sort().each(function (d, j) {
+                            select.add(new Option(d));
+                    });
+                };
             }
             options.data = arr_tabledata[i_arr];
             arr_options[i_arr] = options;
@@ -2080,7 +2264,7 @@ MTiNMS.detail.Display = class {
         chart2gram_max_x = chart2gram_max_x[0];
         let options = {
             scales: {
-                x: { display: true, title: { display: true, text: 'msec' }, min: 0, max: chart2gram_max_x },
+                x: { display: true, title: { display: true, text: 'msec' }, min: 0, max: chart2gram_max_x},
                 y: { display: true, title: { display: true, text: 'ratio' }, min: 0 }
             },
         };
@@ -2091,6 +2275,71 @@ MTiNMS.detail.Display = class {
             plugins: [MTiNMS.CHARTJS_PLUGIN]
         };
         return chartconfig;
+    };
+    convert_dictstats_to_dictChartConfigStats2gramSlowest(dict_stats) {
+        let dictChartConfig = {};
+        const dict_buckets = dict_stats.elapsed_2gram_freqs;
+        const num_thresholdOfSlowest = 0.2;
+        const num_plot = 20;
+
+        MTiNMS.detail.StatsKey2gram.ARR_STATES.forEach( (shiftState) => {
+            let num_max_x = dict_buckets[shiftState][dict_buckets[shiftState].length-1].min;
+            let num_min_x = MTiNMS.detail.calc_prankvalues_from_buckets(dict_buckets[shiftState], [1-num_thresholdOfSlowest], 'min');
+            num_min_x = num_min_x[0];
+
+            const chartdata = {};
+            let datasets = [];
+    
+            Object.keys(dict_buckets).forEach( (key) => {
+                let statsKey2gram = undefined;
+                try {
+                    statsKey2gram = MTiNMS.detail.StatsKey2gram.new_from_string(key);
+                } catch(e) {
+                    // do nothing
+                }
+                if ( (statsKey2gram !== undefined)
+                    && (statsKey2gram.state === shiftState)
+                    && (statsKey2gram.type === 'char-char')
+                ) {
+                    let sum = dict_buckets[key].reduce((a, c) => (a + c.count), 0);
+                    let num_cumulativeRatio = 0;
+                    const data = [];
+                    for(let ind_bucket=dict_buckets[key].length-1; dict_buckets[key][ind_bucket].min >= num_min_x; ind_bucket--) {
+                        const ratio = dict_buckets[key][ind_bucket].count / sum;
+                        data.push({x: dict_buckets[key][ind_bucket].min, y: num_cumulativeRatio});
+                        num_cumulativeRatio += ratio;
+                    }
+                    datasets.push({
+                        label: key,
+                        data: data,
+                        borderWidth: 1,
+                        pointStyle: false,
+                        showLine: true,
+                        yAxisID: 'y',
+                        my_num_cumulativeRatio: num_cumulativeRatio
+                    })
+                }
+            });
+
+            datasets.sort( (a,b) => b.my_num_cumulativeRatio - a.my_num_cumulativeRatio );
+            datasets = datasets.slice(0, num_plot);
+
+            chartdata.datasets = datasets;
+            
+            let chartConfig = {
+                type: 'scatter',
+                data: chartdata,
+                options: {
+                    scales: {
+                        x: { display: true, title: { display: true, text: 'msec' }, min: num_min_x, max: num_max_x, reverse: true },
+                        y: { display: true, title: { display: true, text: 'cumulative ratio' }, min: 0, max: datasets[0].my_num_cumulativeRatio }
+                    }
+                },
+                plugins: [MTiNMS.CHARTJS_PLUGIN]
+            };
+            dictChartConfig[shiftState] = chartConfig;
+        });
+        return dictChartConfig;
     };
     convert_dictstats_to_chartdataposheatmap(dict_stats) {
         const labels = ['quartile1', 'median', 'quartile3'];
@@ -2329,61 +2578,38 @@ MTiNMS.detail.add_DetailRecord_to_stats = function (detailRecord, dict_stats) {
         }
 
         // each char
-        this.countup_dict_buckets(dict_stats.elapsed_freqs,
-            this.get_statskey(detailRecord.targets[i], detailRecord.rawkeys, detailRecord.chars),
-            detailRecord.elapseds[i], dict_stats.settings);
+        let statsKeyChar = MTiNMS.detail.StatsKeyChar.new_from_target_rawkeys_chars(detailRecord.targets[i], detailRecord.rawkeys, detailRecord.chars);
+        this.countup_dict_buckets(dict_stats.elapsed_freqs, statsKeyChar.toString(), detailRecord.elapseds[i], dict_stats.settings);
+        
+        // the key which does not require shift on/off (in almost all cases it is space key)
+        if (statsKeyChar.shift === 'any') {
+            this.countup_dict_buckets(dict_stats.elapsed_freqs, 'space', detailRecord.elapseds[i], dict_stats.settings);
+        }
 
         // 2-gram
         if (i % MTiNMS.TiN.NUM_TARGETS_PER_LAP !== 0) { // except head of line
+            let statsKeyChar_previous = MTiNMS.detail.StatsKeyChar.new_from_target_rawkeys_chars(detailRecord.targets[i-1], detailRecord.rawkeys, detailRecord.chars);
             // shift onset/offset/holdon/holdoff
-            if ((detailRecord.targets[i - 1] !== 0) && (detailRecord.targets[i] !== 0)) {
-                let str_type;
-                if (detailRecord.targets[i - 1] <= MTiNMS.TiN.NUM_NORMALRAWKEYS) {
-                    if (detailRecord.targets[i] <= MTiNMS.TiN.NUM_NORMALRAWKEYS) {
-                        str_type = 'shiftHoldOff';
-                    } else {
-                        str_type = 'shiftOnSet';
-                    }
-                } else {
-                    if (detailRecord.targets[i] <= MTiNMS.TiN.NUM_NORMALRAWKEYS) {
-                        str_type = 'shiftOffSet';
-                    } else {
-                        str_type = 'shiftHoldOn';
-                    }
-                }
+            if ((statsKeyChar_previous.shift !== 'any') && (statsKeyChar.shift !== 'any')) {
+                let statsKey2gram_c_c = new MTiNMS.detail.StatsKey2gram(statsKeyChar_previous, statsKeyChar);
+                let str_shift2gram = statsKey2gram_c_c.state;
+                let statsKey2gram_s_c = new MTiNMS.detail.StatsKey2gram(undefined, statsKeyChar, str_shift2gram);
+                let statsKey2gram_c_s = new MTiNMS.detail.StatsKey2gram(statsKeyChar_previous, undefined, str_shift2gram);
+                let statsKey2gram_s_s = new MTiNMS.detail.StatsKey2gram(undefined, undefined, str_shift2gram);
+
                 this.countup_dict_buckets(dict_stats.elapsed_2gram_freqs,
-                    str_type,
+                    statsKey2gram_s_s.toString(),
                     detailRecord.elapseds[i], dict_stats.settings);
                 this.countup_dict_buckets(dict_stats.elapsed_2gram_freqs,
-                    str_type +
-                    '__' +
-                    this.get_statskey(detailRecord.targets[i], detailRecord.rawkeys, detailRecord.chars),
+                    statsKey2gram_s_c.toString(),
                     detailRecord.elapseds[i], dict_stats.settings);
                 this.countup_dict_buckets(dict_stats.elapsed_2gram_freqs,
-                    this.get_statskey(detailRecord.targets[i - 1], detailRecord.rawkeys, detailRecord.chars) +
-                    '__' +
-                    str_type,
+                    statsKey2gram_c_s.toString(),
                     detailRecord.elapseds[i], dict_stats.settings);
                 this.countup_dict_buckets(dict_stats.elapsed_2gram_freqs,
-                    this.get_statskey(detailRecord.targets[i - 1], detailRecord.rawkeys, detailRecord.chars) +
-                    '__' +
-                    this.get_statskey(detailRecord.targets[i], detailRecord.rawkeys, detailRecord.chars),
+                    statsKey2gram_c_c.toString(),
                     detailRecord.elapseds[i], dict_stats.settings);
             }
-        }
-    }
-};
-MTiNMS.detail.get_statskey = function (target, rawkeys, chars) {
-    if (target === 0) {
-        return 'space';
-    } else {
-        const char = chars[target];
-        if (target <= MTiNMS.TiN.NUM_NORMALRAWKEYS) {
-            const rawkey = rawkeys[target + 2];
-            return char + (rawkey.toString(16).padStart(2, '0')) + '0';
-        } else {
-            const rawkey = rawkeys[target - MTiNMS.TiN.NUM_NORMALRAWKEYS + 2];
-            return char + (rawkey.toString(16).padStart(2, '0')) + '1';
         }
     }
 };
@@ -2393,8 +2619,7 @@ MTiNMS.detail.get_strpos = function (n1, n2 = undefined) {
     } else { // assume (n1, n2) as (x, y)
         return 'pos' + String((n2 - 1) * MTiNMS.TiN.NUM_TARGETS_PER_LAP + n1).padStart(4, '0');
     }
-};
-</script>
+};</script>
 <title>make TiN make sense</title>
 </head>
 <body>

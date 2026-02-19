@@ -1279,7 +1279,7 @@ MTiNMS.ranking.Display = class {
         let chart_options_daily = {
             x: {},
             scales: {
-                x: { type: 'time' },
+                x: { type: 'time', time: { minUnit: 'day' } },
                 y: { display: true, title: { display: true, text: 'sec' } },
                 yTrial: { max: chartdata_daily.completedtrials_cumulative[chartdata_daily.completedtrials_cumulative.length-1].y,
                     display: false, title: { display: false } },
